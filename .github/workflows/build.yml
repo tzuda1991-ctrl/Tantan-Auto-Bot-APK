@@ -1,0 +1,563 @@
+name: Single File Tantan Bot Builder
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Generate Entire Android Project & Code
+        run: |
+          mkdir -p app/src/main/java/com/tantan/auto
+          mkdir -p app/src/main/res/xml
+
+          # 1. Create settings.gradle
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "TantanAutoBot"
+          include ':app'
+          EOF
+
+          # 2. Create Root build.gradle
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.0' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
+          }
+          EOF
+
+          # 3. Create gradle.properties
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+
+          # 4. Create App build.gradle
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+          android {
+              namespace 'com.tantan.auto'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.tantan.auto"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+          }
+          EOF
+
+          # 5. Create AndroidManifest.xml
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <application
+                  android:allowBackup="true"
+                  android:label="Tantan Auto Bot"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".TantanBotService"
+                      android:exported="true"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          # 6. Create accessibility_config.xml
+          cat << 'EOF' > app/src/main/res/xml/accessibility_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeAllMask"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+              android:canPerformGestures="true"
+              android:canRetrieveWindowContent="true"
+              android:notificationTimeout="100" />
+          EOF
+
+          # 7. Create MainActivity.kt (UI + Floating Closeable Icon + Bot Logic)
+          cat << 'EOF' > app/src/main/java/com/tantan/auto/MainActivity.kt
+          package com.tantan.auto
+
+          import android.accessibilityservice.AccessibilityService
+          import android.accessibilityservice.GestureDescription
+          import android.app.Activity
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.Path
+          import android.graphics.PixelFormat
+          import android.graphics.Rect
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.WindowManager
+          import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+          import android.widget.*
+
+          class MainActivity : Activity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val prefs = getSharedPreferences("BotPrefs", Context.MODE_PRIVATE)
+
+                  val layout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(50, 80, 50, 50)
+                      setBackgroundColor(Color.parseColor("#121212"))
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "Tantan Auto Messenger"
+                      textSize = 24f
+                      setTextColor(Color.WHITE)
+                      setPadding(0, 0, 0, 40)
+                  }
+
+                  val label = TextView(this).apply {
+                      text = "मैसेज लिखें (कई रैंडम मैसेज के लिए कॉमा ',' लगाएं):"
+                      setTextColor(Color.LTGRAY)
+                  }
+
+                  val inputMessages = EditText(this).apply {
+                      setText(prefs.getString("msgs", "Hi, Hello, Hey! How are you?"))
+                      setTextColor(Color.WHITE)
+                  }
+
+                  val btnSave = Button(this).apply {
+                      text = "1. Save Messages"
+                      setOnClickListener {
+                          prefs.edit().putString("msgs", inputMessages.text.toString()).apply()
+                          Toast.makeText(this@MainActivity, "मैसेज सेव हो गए!", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+
+                  val btnOverlay = Button(this).apply {
+                      text = "2. Allow Overlay Permission"
+                      setOnClickListener {
+                          if (!Settings.canDrawOverlays(this@MainActivity)) {
+                              startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                          } else {
+                              Toast.makeText(this@MainActivity, "Overlay Permission ऑन है!", Toast.LENGTH_SHORT).show()
+                          }
+                      }
+                  }
+
+                  val btnAccess = Button(this).apply {
+                      text = "3. Turn ON Accessibility Service"
+                      setOnClickListener {
+                          startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                      }
+                  }
+
+                  val btnShowIcon = Button(this).apply {
+                      text = "4. Show Floating Icon (अगर बंद कर दिया हो)"
+                      setOnClickListener {
+                          TantanBotService.instance?.showFloatingBar()
+                              ?: Toast.makeText(this@MainActivity, "पहले स्टेप 3 से Accessibility ऑन करें!", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+
+                  val btnClear = Button(this).apply {
+                      text = "Reset Sent History (नए सिरे से भेजें)"
+                      setOnClickListener {
+                          TantanBotService.messagedUsers.clear()
+                          Toast.makeText(this@MainActivity, "हिस्ट्री क्लियर हो गई!", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+
+                  layout.addView(title)
+                  layout.addView(label)
+                  layout.addView(inputMessages)
+                  layout.addView(btnSave)
+                  layout.addView(btnOverlay)
+                  layout.addView(btnAccess)
+                  layout.addView(btnShowIcon)
+                  layout.addView(btnClear)
+                  setContentView(layout)
+              }
+          }
+
+          class TantanBotService : AccessibilityService() {
+
+              companion object {
+                  val messagedUsers = mutableSetOf<String>()
+                  var isRunning = false
+                  var instance: TantanBotService? = null
+              }
+
+              private val handler = Handler(Looper.getMainLooper())
+              private var windowManager: WindowManager? = null
+              private var floatLayout: LinearLayout? = null
+              private var startStopBtn: Button? = null
+              private var step = 0
+
+              override fun onServiceConnected() {
+                  super.onServiceConnected()
+                  instance = this
+                  showFloatingBar()
+              }
+
+              fun showFloatingBar() {
+                  if (!Settings.canDrawOverlays(this)) return
+                  if (floatLayout != null) return
+
+                  windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
+                  val params = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                      PixelFormat.TRANSLUCENT
+                  ).apply {
+                      gravity = Gravity.TOP or Gravity.START
+                      x = 30
+                      y = 350
+                  }
+
+                  floatLayout = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setBackgroundColor(Color.parseColor("#DD222222"))
+                      setPadding(12, 12, 12, 12)
+                  }
+
+                  // Drag Handle (उंगली से पकड़कर आइकॉन को कहीं भी खिसकाने के लिए)
+                  val dragBtn = TextView(this).apply {
+                      text = " ✥ "
+                      textSize = 18f
+                      setTextColor(Color.WHITE)
+                      setPadding(10, 10, 15, 10)
+                      setOnTouchListener(object : View.OnTouchListener {
+                          var initialX = 0
+                          var initialY = 0
+                          var touchX = 0f
+                          var touchY = 0f
+                          override fun onTouch(v: View?, event: MotionEvent): Boolean {
+                              when (event.action) {
+                                  MotionEvent.ACTION_DOWN -> {
+                                      initialX = params.x
+                                      initialY = params.y
+                                      touchX = event.rawX
+                                      touchY = event.rawY
+                                      return true
+                                  }
+                                  MotionEvent.ACTION_MOVE -> {
+                                      params.x = initialX + (event.rawX - touchX).toInt()
+                                      params.y = initialY + (event.rawY - touchY).toInt()
+                                      windowManager?.updateViewLayout(floatLayout, params)
+                                      return true
+                                  }
+                              }
+                              return false
+                          }
+                      })
+                  }
+
+                  // START / STOP बटन
+                  startStopBtn = Button(this).apply {
+                      text = "START"
+                      setBackgroundColor(Color.GREEN)
+                      setTextColor(Color.BLACK)
+                      setOnClickListener {
+                          isRunning = !isRunning
+                          if (isRunning) {
+                              text = "STOP"
+                              setBackgroundColor(Color.RED)
+                              setTextColor(Color.WHITE)
+                              step = 0
+                              handler.postDelayed(botLoop, 1000)
+                          } else {
+                              stopBot()
+                          }
+                      }
+                  }
+
+                  // CLOSE (X) बटन - आइकॉन को डिस्प्ले से हटाने के लिए
+                  val closeBtn = Button(this).apply {
+                      text = "✖"
+                      setBackgroundColor(Color.DKGRAY)
+                      setTextColor(Color.WHITE)
+                      setOnClickListener {
+                          stopBot()
+                          removeFloatingBar()
+                      }
+                  }
+
+                  floatLayout?.addView(dragBtn)
+                  floatLayout?.addView(startStopBtn)
+                  floatLayout?.addView(closeBtn)
+                  windowManager?.addView(floatLayout, params)
+              }
+
+              private fun stopBot() {
+                  isRunning = false
+                  handler.removeCallbacks(botLoop)
+                  startStopBtn?.apply {
+                      text = "START"
+                      setBackgroundColor(Color.GREEN)
+                      setTextColor(Color.BLACK)
+                  }
+              }
+
+              private fun removeFloatingBar() {
+                  if (floatLayout != null) {
+                      windowManager?.removeView(floatLayout)
+                      floatLayout = null
+                  }
+              }
+
+              private val botLoop = object : Runnable {
+                  override fun run() {
+                      if (!isRunning) return
+                      val root = rootInActiveWindow
+                      if (root == null) {
+                          handler.postDelayed(this, 1500)
+                          return
+                      }
+
+                      when (step) {
+                          0 -> processChatList(root)
+                          1 -> typeAndSendMessage(root)
+                          2 -> {
+                              performGlobalAction(GLOBAL_ACTION_BACK)
+                              step = 0
+                              handler.postDelayed(this, 1800)
+                          }
+                      }
+                  }
+              }
+
+              private fun processChatList(root: AccessibilityNodeInfo) {
+                  val inputField = findInputNode(root)
+                  if (inputField != null) {
+                      performGlobalAction(GLOBAL_ACTION_BACK)
+                      handler.postDelayed(botLoop, 1500)
+                      return
+                  }
+
+                  val targetRow = findNextUnmessagedUser(root)
+                  if (targetRow != null) {
+                      if (clickNodeOrParent(targetRow)) {
+                          step = 1
+                          handler.postDelayed(botLoop, 2200)
+                          return
+                      }
+                  }
+
+                  scrollDown()
+                  handler.postDelayed(botLoop, 2500)
+              }
+
+              private fun findNextUnmessagedUser(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+                  val allNodes = mutableListOf<AccessibilityNodeInfo>()
+                  collectNodes(root, allNodes)
+
+                  val ignoreWords = listOf(
+                      "Chat", "Whisper", "Team Tantan", "Matched", "ago", "year", "months",
+                      "days", "tantan", "Discover", "Likes", "Messages", "Me", "Send me",
+                      "Hello", "Hi", "Ok", "Ya", "India", "VIP", "START", "STOP"
+                  )
+
+                  for (node in allNodes) {
+                      val txt = node.text?.toString()?.trim() ?: continue
+                      if (txt.length in 2..25 && !messagedUsers.contains(txt)) {
+                          val isIgnored = ignoreWords.any { txt.contains(it, ignoreCase = true) }
+                          if (!isIgnored) {
+                              val rect = Rect()
+                              node.getBoundsInScreen(rect)
+                              if (rect.top in 240..2000 && rect.left < 600) {
+                                  messagedUsers.add(txt)
+                                  return node
+                              }
+                          }
+                      }
+                  }
+                  return null
+              }
+
+              private fun typeAndSendMessage(root: AccessibilityNodeInfo) {
+                  val editNode = findInputNode(root)
+                  if (editNode != null) {
+                      val prefs = getSharedPreferences("BotPrefs", Context.MODE_PRIVATE)
+                      val rawMsgs = prefs.getString("msgs", "Hi") ?: "Hi"
+                      val msgList = rawMsgs.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                      val randomMsg = if (msgList.isNotEmpty()) msgList.random() else "Hi"
+
+                      val args = Bundle()
+                      args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, randomMsg)
+                      editNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                      editNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+                      handler.postDelayed({
+                          val updatedRoot = rootInActiveWindow
+                          if (updatedRoot != null) {
+                              if (!clickSendButton(updatedRoot)) {
+                                  tapScreen(980f, 2180f)
+                              }
+                          }
+                          step = 2
+                          handler.postDelayed(botLoop, 1800)
+                      }, 1200)
+                  } else {
+                      step = 2
+                      handler.postDelayed(botLoop, 1000)
+                  }
+              }
+
+              private fun findInputNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+                  val nodes = mutableListOf<AccessibilityNodeInfo>()
+                  collectNodes(root, nodes)
+                  for (n in nodes) {
+                      if (n.isEditable || n.className?.toString()?.contains("EditText") == true) {
+                          return n
+                      }
+                      val hint = n.text?.toString() ?: ""
+                      if (hint.contains("Write a message", true)) {
+                          return n
+                      }
+                  }
+                  return null
+              }
+
+              private fun clickSendButton(root: AccessibilityNodeInfo): Boolean {
+                  val nodes = mutableListOf<AccessibilityNodeInfo>()
+                  collectNodes(root, nodes)
+                  for (n in nodes) {
+                      val t = n.text?.toString() ?: ""
+                      val d = n.contentDescription?.toString() ?: ""
+                      val id = n.viewIdResourceName ?: ""
+                      if (t.equals("Send", true) || d.contains("Send", true) || id.contains("send", true)) {
+                          if (clickNodeOrParent(n)) return true
+                      }
+                  }
+                  return false
+              }
+
+              private fun clickNodeOrParent(node: AccessibilityNodeInfo?): Boolean {
+                  var current = node
+                  var depth = 0
+                  while (current != null && depth < 6) {
+                      if (current.isClickable) {
+                          return current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                      }
+                      current = current.parent
+                      depth++
+                  }
+                  if (node != null) {
+                      val rect = Rect()
+                      node.getBoundsInScreen(rect)
+                      tapScreen(rect.centerX().toFloat(), rect.centerY().toFloat())
+                      return true
+                  }
+                  return false
+              }
+
+              private fun scrollDown() {
+                  val path = Path().apply {
+                      moveTo(500f, 1750f)
+                      lineTo(500f, 450f)
+                  }
+                  val gesture = GestureDescription.Builder()
+                      .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
+                      .build()
+                  dispatchGesture(gesture, null, null)
+              }
+
+              private fun tapScreen(x: Float, y: Float) {
+                  val path = Path().apply { moveTo(x, y) }
+                  val gesture = GestureDescription.Builder()
+                      .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
+                      .build()
+                  dispatchGesture(gesture, null, null)
+              }
+
+              private fun collectNodes(node: AccessibilityNodeInfo?, list: MutableList<AccessibilityNodeInfo>) {
+                  if (node == null) return
+                  list.add(node)
+                  for (i in 0 until node.childCount) {
+                      collectNodes(node.getChild(i), list)
+                  }
+              }
+
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+              override fun onInterrupt() { stopBot() }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  instance = null
+                  removeFloatingBar()
+              }
+          }
+          EOF
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
+
+      - name: Build Debug APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tantan-Auto-Bot-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
