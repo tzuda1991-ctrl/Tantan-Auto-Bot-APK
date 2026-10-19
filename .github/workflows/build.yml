@@ -1,4 +1,4 @@
-name: Single File Tantan Bot Builder V2
+name: Single File Tantan Bot Builder V3
 
 on:
   push:
@@ -67,8 +67,8 @@ jobs:
                   applicationId "com.tantan.auto"
                   minSdk 24
                   targetSdk 34
-                  versionCode 2
-                  versionName "2.0"
+                  versionCode 3
+                  versionName "3.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -128,7 +128,7 @@ jobs:
               android:notificationTimeout="100" />
           EOF
 
-          # 7. Create MainActivity.kt (Fixed Keyboard Tap + Accurate Row Detection)
+          # 7. Create MainActivity.kt (V3 - Direct Physical Tap on Blue Send Button)
           cat << 'EOF' > app/src/main/java/com/tantan/auto/MainActivity.kt
           package com.tantan.auto
 
@@ -141,18 +141,17 @@ jobs:
           import android.graphics.Path
           import android.graphics.PixelFormat
           import android.graphics.Rect
-          import android.os.Build
           import android.os.Bundle
           import android.os.Handler
           import android.os.Looper
           import android.provider.Settings
+          import android.util.DisplayMetrics
           import android.view.Gravity
           import android.view.MotionEvent
           import android.view.View
           import android.view.WindowManager
           import android.view.accessibility.AccessibilityEvent
           import android.view.accessibility.AccessibilityNodeInfo
-          import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
           import android.widget.*
 
           class MainActivity : Activity() {
@@ -167,7 +166,7 @@ jobs:
                   }
 
                   val title = TextView(this).apply {
-                      text = "Tantan Auto Messenger V2"
+                      text = "Tantan Auto Messenger V3"
                       textSize = 24f
                       setTextColor(Color.WHITE)
                       setPadding(0, 0, 0, 40)
@@ -179,7 +178,7 @@ jobs:
                   }
 
                   val inputMessages = EditText(this).apply {
-                      setText(prefs.getString("msgs", "Hi, Hello, How are you?"))
+                      setText(prefs.getString("msgs", "Hi, Hello, Hey"))
                       setTextColor(Color.WHITE)
                   }
 
@@ -250,18 +249,25 @@ jobs:
               private var floatLayout: LinearLayout? = null
               private var startStopBtn: Button? = null
 
-              // State Machine Steps:
-              // 0 = Find & click user in chat list
-              // 1 = Tap "Write a message" box to open keyboard
-              // 2 = Paste text into open input field
-              // 3 = Tap keyboard "Send" button
-              // 4 = Return back to chat list
+              // 0 = Select User from List
+              // 1 = Tap "Write a message" box to pop up keyboard
+              // 2 = Set text inside box
+              // 3 = Physical Tap on Keyboard's Blue "Send" button
+              // 4 = Navigate Back to Chat List
               private var step = 0
 
               override fun onServiceConnected() {
                   super.onServiceConnected()
                   instance = this
                   showFloatingBar()
+              }
+
+              private fun getRealScreenSize(): Pair<Int, Int> {
+                  val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                  val metrics = DisplayMetrics()
+                  @Suppress("DEPRECATION")
+                  wm.defaultDisplay.getRealMetrics(metrics)
+                  return Pair(metrics.widthPixels, metrics.heightPixels)
               }
 
               fun showFloatingBar() {
@@ -278,8 +284,8 @@ jobs:
                       PixelFormat.TRANSLUCENT
                   ).apply {
                       gravity = Gravity.TOP or Gravity.START
-                      x = 450
-                      y = 110
+                      x = 420
+                      y = 95
                   }
 
                   floatLayout = LinearLayout(this).apply {
@@ -330,7 +336,7 @@ jobs:
                               setBackgroundColor(Color.RED)
                               setTextColor(Color.WHITE)
                               step = 0
-                              handler.postDelayed(botLoop, 800)
+                              handler.postDelayed(botLoop, 700)
                           } else {
                               stopBot()
                           }
@@ -383,18 +389,17 @@ jobs:
                           0 -> step0SelectUser(root)
                           1 -> step1OpenKeyboard(root)
                           2 -> step2PasteText(root)
-                          3 -> step3PressSend(root)
+                          3 -> step3TapBlueSendButton()
                           4 -> step4NavigateBack(root)
                       }
                   }
               }
 
-              // STEP 0: चैट लिस्ट से एक-एक करके यूजर को चुनना
+              // STEP 0: लिस्ट में से यूजर के नाम पर टैप करना
               private fun step0SelectUser(root: AccessibilityNodeInfo) {
-                  // अगर अभी भी किसी चैट के अंदर हैं तो बाहर निकलें
                   if (!isOnChatListScreen(root)) {
                       performGlobalAction(GLOBAL_ACTION_BACK)
-                      handler.postDelayed(botLoop, 1500)
+                      handler.postDelayed(botLoop, 1400)
                       return
                   }
 
@@ -402,35 +407,34 @@ jobs:
                   if (userNode != null) {
                       val rect = Rect()
                       userNode.getBoundsInScreen(rect)
-                      // नाम के ऊपर सीधा टैप करें ताकि चैट 100% खुले
-                      tapScreen(rect.centerX().toFloat(), rect.centerY().toFloat())
+                      // नाम के बाईं तरफ (प्रोफाइल फोटो के पास) टैप करें ताकि ऊपर फ्लोटिंग बार हो तब भी टच काम करे
+                      val tapX = 300f
+                      val tapY = rect.centerY().toFloat()
+                      tapScreen(tapX, tapY)
                       step = 1
-                      handler.postDelayed(botLoop, 2200)
+                      handler.postDelayed(botLoop, 2000)
                   } else {
-                      // स्क्रीन पर दिख रहे सभी नाम हो गए, अब नीचे स्क्रोल करें
                       scrollDown()
                       handler.postDelayed(botLoop, 2200)
                   }
               }
 
-              // STEP 1: "Write a message" बॉक्स पर असली टैप करना ताकि कीबोर्ड ऊपर आए
+              // STEP 1: "Write a message" पर टैप करके कीबोर्ड खोलना
               private fun step1OpenKeyboard(root: AccessibilityNodeInfo) {
                   val inputNode = findInputNode(root)
                   if (inputNode != null) {
                       val rect = Rect()
                       inputNode.getBoundsInScreen(rect)
-                      // इनपुट बॉक्स के बीच में टैप करें (जैसे इंसान उंगली से करता है)
                       tapScreen(rect.centerX().toFloat(), rect.centerY().toFloat())
                       step = 2
-                      handler.postDelayed(botLoop, 1500) // कीबोर्ड खुलने का इंतज़ार करें
+                      handler.postDelayed(botLoop, 1400)
                   } else {
-                      // अगर यह कोई ऐसी प्रोफाइल है जहाँ मैसेज बॉक्स नहीं है, तो वापस जाएं
                       step = 4
                       handler.postDelayed(botLoop, 1000)
                   }
               }
 
-              // STEP 2: कीबोर्ड खुलने के बाद मैसेज टाइप करना
+              // STEP 2: मैसेज पेस्ट करना
               private fun step2PasteText(root: AccessibilityNodeInfo) {
                   val inputNode = findInputNode(root)
                   if (inputNode != null) {
@@ -445,28 +449,48 @@ jobs:
                       inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
                       step = 3
-                      handler.postDelayed(botLoop, 1000)
+                      handler.postDelayed(botLoop, 900)
                   } else {
                       step = 4
                       handler.postDelayed(botLoop, 1000)
                   }
               }
 
-              // STEP 3: कीबोर्ड का नीला "Send" बटन दबाना
-              private fun step3PressSend(root: AccessibilityNodeInfo) {
-                  val inputNode = findInputNode(root)
-                  var imeActionSuccess = false
+              // STEP 3: कीबोर्ड के नीले "Send" बटन पर 100% फिजिकल टैप करना
+              private fun step3TapBlueSendButton() {
+                  var sendButtonRect: Rect? = null
 
-                  // कोशिश 1: Android 11+ का डायरेक्ट IME_ENTER एक्शन
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && inputNode != null) {
-                      imeActionSuccess = inputNode.performAction(AccessibilityAction.ACTION_IME_ENTER.id)
-                  }
+                  // तरीका 1: सभी विंडो (कीबोर्ड विंडो सहित) में "Send" बटन ढूँढें
+                  try {
+                      for (window in windows) {
+                          val wRoot = window.root ?: continue
+                          val nodes = mutableListOf<AccessibilityNodeInfo>()
+                          collectNodes(wRoot, nodes)
+                          for (n in nodes) {
+                              val t = n.text?.toString()?.trim() ?: ""
+                              val d = n.contentDescription?.toString()?.trim() ?: ""
+                              if (t.equals("Send", true) || d.equals("Send", true)) {
+                                  val r = Rect()
+                                  n.getBoundsInScreen(r)
+                                  if (r.top > 1500 && r.left > 700) {
+                                      sendButtonRect = r
+                                      break
+                                  }
+                              }
+                          }
+                          if (sendButtonRect != null) break
+                      }
+                  } catch (_: Exception) {}
 
-                  // कोशिश 2: कीबोर्ड के "Send" बटन के सटीक कोऑर्डिनेट पर टैप करना (Bottom Right)
-                  if (!imeActionSuccess) {
-                      val metrics = resources.displayMetrics
-                      val sendX = metrics.widthPixels * 0.90f  // 1080p पर ~972px
-                      val sendY = metrics.heightPixels * 0.915f // 2400p पर ~2196px (Send Button)
+                  if (sendButtonRect != null) {
+                      // अगर कीबोर्ड का Send नोड मिल गया तो ठीक उसके बीच में टैप करें
+                      tapScreen(sendButtonRect.centerX().toFloat(), sendButtonRect.centerY().toFloat())
+                  } else {
+                      // तरीका 2: आपके Samsung कीबोर्ड के सटीक कोऑर्डिनेट पर सीधा फिजिकल टैप करें
+                      // (वीडियो में नीला Send बटन चौड़ाई के 91% और असली फुल हाइट के 88.2% पर है)
+                      val (realW, realH) = getRealScreenSize()
+                      val sendX = realW * 0.91f
+                      val sendY = realH * 0.882f
                       tapScreen(sendX, sendY)
                   }
 
@@ -474,14 +498,14 @@ jobs:
                   handler.postDelayed(botLoop, 1600)
               }
 
-              // STEP 4: चैट से वापस बाहर लिस्ट में आना (कीबोर्ड खुला हो तो 2 बार Back)
+              // STEP 4: वापस चैट लिस्ट पर आना
               private fun step4NavigateBack(root: AccessibilityNodeInfo) {
                   if (isOnChatListScreen(root)) {
                       step = 0
                       handler.postDelayed(botLoop, 800)
                   } else {
                       performGlobalAction(GLOBAL_ACTION_BACK)
-                      handler.postDelayed(botLoop, 1300)
+                      handler.postDelayed(botLoop, 1200)
                   }
               }
 
@@ -505,18 +529,20 @@ jobs:
                   val candidates = mutableListOf<Pair<AccessibilityNodeInfo, Rect>>()
 
                   for (node in allNodes) {
+                      val pkg = node.packageName?.toString() ?: ""
+                      // अपने खुद के फ्लोटिंग बटन के टेक्स्ट को इग्नोर करें
+                      if (pkg.contains("com.tantan.auto")) continue
+
                       val txt = node.text?.toString()?.trim() ?: continue
                       if (txt.isEmpty()) continue
 
                       val rect = Rect()
                       node.getBoundsInScreen(rect)
 
-                      // Tantan में यूजर का नाम हमेशा बाईं तरफ प्रोफाइल फोटो के बगल में होता है (rect.left 180 से 400 के बीच)
-                      // और समय (जैसे "1 week ago") दाईं तरफ होता है (rect.left > 600)
-                      if (rect.top in 240..2050 && rect.left in 160..450) {
+                      // चैट लिस्ट में यूजर का नाम हमेशा बाईं तरफ होता है
+                      if (rect.top in 180..2050 && rect.left in 160..480) {
                           val lower = txt.lowercase()
 
-                          // नीचे वाली सबटाइटल लाइन ("Matched X ago" या पुराना मैसेज) को इग्नोर करें
                           val isSubtitleOrSystem =
                               lower.startsWith("matched ") ||
                               lower == "team tantan" ||
@@ -524,6 +550,7 @@ jobs:
                               lower == "whisper" ||
                               lower == "hi" ||
                               lower == "hello" ||
+                              lower == "hey" ||
                               lower == "helllooo" ||
                               lower == "ok" ||
                               lower == "ya" ||
@@ -536,10 +563,8 @@ jobs:
                       }
                   }
 
-                  // ऊपर से नीचे के क्रम में सॉर्ट करें
                   candidates.sortBy { it.second.top }
 
-                  // अगर एक ही चैट रो में नाम और उसका आखिरी मैसेज दोनों आ रहे हों, तो सिर्फ ऊपर वाले (यानी नाम) को चुनें
                   val filteredRows = mutableListOf<AccessibilityNodeInfo>()
                   var lastTop = -200
                   for (pair in candidates) {
@@ -575,10 +600,10 @@ jobs:
               }
 
               private fun scrollDown() {
-                  val metrics = resources.displayMetrics
-                  val centerX = metrics.widthPixels * 0.5f
-                  val startY = metrics.heightPixels * 0.78f
-                  val endY = metrics.heightPixels * 0.25f
+                  val (realW, realH) = getRealScreenSize()
+                  val centerX = realW * 0.5f
+                  val startY = realH * 0.78f
+                  val endY = realH * 0.25f
 
                   val path = Path().apply {
                       moveTo(centerX, startY)
@@ -591,9 +616,12 @@ jobs:
               }
 
               private fun tapScreen(x: Float, y: Float) {
-                  val path = Path().apply { moveTo(x, y) }
+                  val path = Path().apply {
+                      moveTo(x, y)
+                      lineTo(x, y)
+                  }
                   val gesture = GestureDescription.Builder()
-                      .addStroke(GestureDescription.StrokeDescription(path, 0, 80))
+                      .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
                       .build()
                   dispatchGesture(gesture, null, null)
               }
@@ -628,5 +656,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Tantan-Auto-Bot-V2-APK
+          name: Tantan-Auto-Bot-V3-APK
           path: app/build/outputs/apk/debug/app-debug.apk
